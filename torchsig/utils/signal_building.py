@@ -1,0 +1,237 @@
+from typing import Any
+
+from torchsig.signals.builder import ConcatSignalGenerator
+from torchsig.signals.builders.adsb import AdsBSignalGenerator
+from torchsig.signals.builders.am import AMSignalGenerator
+from torchsig.signals.builders.btle import BTLESignalGenerator
+from torchsig.signals.builders.cellular import GSMSignalGenerator
+from torchsig.signals.builders.chirpss import ChirpSSSignalGenerator
+from torchsig.signals.builders.constellation import ConstellationSignalGenerator
+from torchsig.signals.builders.constellation_maps import all_symbol_maps
+from torchsig.signals.builders.dvb import DVBS2SignalGenerator
+from torchsig.signals.builders.fm import FMSignalGenerator
+from torchsig.signals.builders.fsk import FSKSignalGenerator
+from torchsig.signals.builders.lfm import LFMSignalGenerator
+from torchsig.signals.builders.lmr import DMRSignalGenerator, P25SignalGenerator
+from torchsig.signals.builders.lora import LoraSignalGenerator
+from torchsig.signals.builders.ofdm import MAX_NUM_SUBCARRIERS, MIN_NUM_SUBCARRIERS, OFDMSignalGenerator
+from torchsig.signals.builders.tone import ToneSignalGenerator
+from torchsig.signals.builders.wifi import Wifi80211aSignalGenerator
+from torchsig.signals.builders.zigbee import ZigBeeSignalGenerator
+
+__all__ = ["family_names", "lookup_signal_generator_by_string", "num_subcarrier_values", "signal_generator_lookup_table"]
+
+# Stores generator class and metadata for generators to make per label
+SignalGeneratorSpec = tuple[type, dict[str, Any]] | tuple[type, list[tuple[type, dict[str, Any]]], dict[str, Any]]
+
+_SIMPLE_GENERATOR_SPEC_LENGTH = 2
+_CONCAT_GENERATOR_SPEC_LENGTH = 3
+
+non_public_generator_names = {"80211a_ack", "80211a_cts", "80211a_rts"}
+
+signal_generator_lookup_table: dict[str, SignalGeneratorSpec] = {}
+
+
+def _add_signal_generator(
+    name: str,
+    generator_cls: type,
+    metadata: dict[str, Any],
+) -> None:
+    signal_generator_lookup_table[name] = (generator_cls, metadata)
+
+
+def _validate_ofdm_num_subcarriers(values: Any) -> tuple[int, ...]:
+    """Validate configured OFDM subcarrier counts without changing defaults."""
+    if isinstance(values, (str, bytes)):
+        raise TypeError("ofdm_num_subcarriers must be an iterable of integers")
+    try:
+        normalized = tuple(values)
+    except TypeError as error:
+        raise TypeError("ofdm_num_subcarriers must be an iterable of integers") from error
+    if not normalized:
+        raise ValueError("ofdm_num_subcarriers must contain at least one value")
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in normalized):
+        raise TypeError("ofdm_num_subcarriers values must be integers")
+    if any(not MIN_NUM_SUBCARRIERS <= value <= MAX_NUM_SUBCARRIERS for value in normalized):
+        raise ValueError(f"ofdm_num_subcarriers values must be between {MIN_NUM_SUBCARRIERS} and {MAX_NUM_SUBCARRIERS}, inclusive")
+    return tuple(dict.fromkeys(normalized))
+
+
+def _family_name(signal_name: str) -> str | None:
+    """Return the modulation family for a concrete signal generator name."""
+    if signal_name.startswith("ofdm-"):
+        family = "ofdm"
+    elif signal_name.startswith("am-"):
+        family = "am"
+    elif signal_name.startswith("lfm-"):
+        family = "lfm"
+    elif signal_name.startswith("fm-"):
+        family = "fm"
+    elif signal_name.endswith(("fsk", "gfsk")):
+        family = "fsk"
+    elif signal_name.endswith(("msk", "gmsk")):
+        family = "msk"
+    elif "psk" in signal_name:
+        family = "psk"
+    elif "qam" in signal_name:
+        family = "qam"
+    elif "ask" in signal_name:
+        family = "ask"
+    elif "adsb" in signal_name:
+        family = "adsb"
+    elif "btle" in signal_name:
+        family = "btle"
+    elif "gsm" in signal_name:
+        family = "cellular"
+    elif "dvb" in signal_name:
+        family = "dvb"
+    elif ("dmr" in signal_name) or ("p25" in signal_name):
+        family = "lmr"
+    elif "lora" in signal_name:
+        family = "lora"
+    elif "80211a" in signal_name:
+        family = "wifi"
+    elif "zigbee" in signal_name:
+        family = "zigbee"
+    else:
+        family = None
+    return family
+
+
+# Initialize lookup table with signal generators
+_add_signal_generator("tone", ToneSignalGenerator, {})
+
+num_subcarrier_values = [64, 72, 128, 180, 256, 300, 512, 600, 900, 1024, 1200, 2048]
+for num_subcarriers in num_subcarrier_values:
+    _add_signal_generator(
+        f"ofdm-{num_subcarriers}",
+        OFDMSignalGenerator,
+        {"num_subcarriers": num_subcarriers},
+    )
+
+_add_signal_generator("lfm-data", LFMSignalGenerator, {"lfm_type": "data"})
+_add_signal_generator("lfm-radar", LFMSignalGenerator, {"lfm_type": "radar"})
+
+for fsk_type in ["fsk", "gfsk", "msk", "gmsk"]:
+    for constellation_size in [2, 4, 8, 16]:
+        _add_signal_generator(
+            f"{constellation_size}{fsk_type}",
+            FSKSignalGenerator,
+            {"fsk_type": fsk_type, "constellation_size": constellation_size},
+        )
+
+_add_signal_generator("fm-data", FMSignalGenerator, {})
+
+for constellation_name in all_symbol_maps:
+    _add_signal_generator(
+        constellation_name,
+        ConstellationSignalGenerator,
+        {"constellation_name": constellation_name},
+    )
+
+_add_signal_generator("chirpss", ChirpSSSignalGenerator, {})
+
+for am_mode in ["dsb", "dsb-sc", "usb", "lsb"]:
+    _add_signal_generator(
+        f"am-{am_mode}",
+        AMSignalGenerator,
+        {"am_mode": am_mode},
+    )
+
+_add_signal_generator("adsb-long", AdsBSignalGenerator, {"frame_type": "long"})
+_add_signal_generator("adsb-short", AdsBSignalGenerator, {"frame_type": "short"})
+_add_signal_generator("btle", BTLESignalGenerator, {})
+_add_signal_generator("gsm", GSMSignalGenerator, {})
+_add_signal_generator("dvbs2", DVBS2SignalGenerator, {})
+_add_signal_generator("dmr", DMRSignalGenerator, {})
+_add_signal_generator("p25", P25SignalGenerator, {})
+_add_signal_generator("lora", LoraSignalGenerator, {})
+_add_signal_generator("80211a", Wifi80211aSignalGenerator, {"frame_type": "data"})
+_add_signal_generator("80211a_ack", Wifi80211aSignalGenerator, {"frame_type": "ack"})
+_add_signal_generator("80211a_cts", Wifi80211aSignalGenerator, {"frame_type": "cts"})
+_add_signal_generator("80211a_rts", Wifi80211aSignalGenerator, {"frame_type": "rts"})
+_add_signal_generator("zigbee", ZigBeeSignalGenerator, {})
+
+# convert to list
+concrete_generator_names = list(signal_generator_lookup_table)
+public_generator_names = [name for name in concrete_generator_names if name not in non_public_generator_names]
+
+signal_generator_lookup_table["all"] = (
+    ConcatSignalGenerator,
+    [signal_generator_lookup_table[name] for name in public_generator_names],
+    {},
+)
+
+family_names = ["ofdm", "am", "fm", "fsk", "psk", "qam", "ask", "lfm", "msk", "adsb"]
+for family_name in family_names:
+    signal_generator_lookup_table[family_name] = (
+        ConcatSignalGenerator,
+        [signal_generator_lookup_table[name] for name in concrete_generator_names if _family_name(name) == family_name],
+        {"family_name": family_name},
+    )
+
+
+def lookup_signal_generator_by_string(
+    signal_generator_name: str,
+    ofdm_num_subcarriers: Any = tuple(num_subcarrier_values),
+) -> Any:
+    """Look up and instantiate a signal generator by its name.
+
+    This function searches the signal_generator_lookup_table for the given name
+    and returns an instantiated signal generator. It handles both simple generators
+    and concatenated generators (ConcatSignalGenerator).
+
+    Args:
+        signal_generator_name: The name of the signal generator to instantiate.
+        ofdm_num_subcarriers: OFDM counts to use for an explicit ``"ofdm"`` or
+            ``"all"`` aggregate lookup. The existing OFDM values remain the
+            default.
+
+    Returns:
+        An instantiated signal generator object.
+
+    Raises:
+        ValueError: If the signal generator name is not found in the lookup table
+            or if there's an error instantiating the generator.
+    """
+    configured_counts = _validate_ofdm_num_subcarriers(ofdm_num_subcarriers)
+    default_counts = tuple(num_subcarrier_values)
+
+    if signal_generator_name in {"ofdm", "all"} and configured_counts != default_counts:
+        configured_specs = [(OFDMSignalGenerator, {"num_subcarriers": value}) for value in configured_counts]
+        _, default_specs, aggregate_metadata = signal_generator_lookup_table[signal_generator_name]
+        if signal_generator_name == "ofdm":
+            selected_specs = configured_specs
+        else:
+            default_ofdm_specs = [signal_generator_lookup_table[f"ofdm-{value}"] for value in default_counts]
+            selected_specs = []
+            added_configured_ofdm = False
+            for spec in default_specs:
+                if spec in default_ofdm_specs:
+                    if not added_configured_ofdm:
+                        selected_specs.extend(configured_specs)
+                        added_configured_ofdm = True
+                else:
+                    selected_specs.append(spec)
+        lookup_value = (ConcatSignalGenerator, selected_specs, aggregate_metadata)
+    elif signal_generator_name.startswith("ofdm-"):
+        suffix = signal_generator_name.removeprefix("ofdm-")
+        if suffix and suffix.isascii() and suffix.isdigit():
+            num_subcarriers = int(suffix)
+            lookup_value = (OFDMSignalGenerator, {"num_subcarriers": num_subcarriers}) if MIN_NUM_SUBCARRIERS <= num_subcarriers <= MAX_NUM_SUBCARRIERS else None
+        else:
+            lookup_value = None
+    else:
+        lookup_value = signal_generator_lookup_table.get(signal_generator_name)
+    if lookup_value is None:
+        raise ValueError(f"could not instantiate signal generator: {signal_generator_name!r}")
+    if len(lookup_value) == _SIMPLE_GENERATOR_SPEC_LENGTH:
+        generator_init, metadata = lookup_value
+        return generator_init(metadata=metadata)
+    if len(lookup_value) == _CONCAT_GENERATOR_SPEC_LENGTH and lookup_value[0] == ConcatSignalGenerator:
+        generator_init, generator_list, metadata = lookup_value
+        return generator_init(
+            signal_generators=[element[0](metadata=element[1]) for element in generator_list],
+            metadata=metadata,
+        )
+    raise ValueError(f"could not instantiate signal generator: {signal_generator_name!r}")
